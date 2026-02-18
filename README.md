@@ -28,5 +28,5 @@ https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows
 https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip
 https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
 
-## Know issues
+## Known issues
 It may happen that a video cannot be downloaded even though all dependencies are cleanly installed and up to date. In this case, you can only wait until there is an update from yt-dlp that can cope with the changes Google has made to YouTube.
