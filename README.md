@@ -1,6 +1,9 @@
 # YouTube Downloader
 Simple UI to paste a bunch of links to YouTube videos in and download them using yt-dlp
 
+![title screen](Screenshot.png)
+
+  
 ## Usage
 When you start it for the first time, all necessary dependencies will be installed in the folder where you installed YouTube Downloader.
 
