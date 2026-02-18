@@ -1,6 +1,6 @@
 # Requirements
-AutoHotkey v2
-(Optional) Resource Hacker
+AutoHotkey v2  
+(Optional) Resource Hacker  
 (Optional) UPX
 
 # Build process
