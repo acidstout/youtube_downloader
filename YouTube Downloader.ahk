@@ -1,44 +1,48 @@
+;@Ahk2Exe-SetName YouTube Downloader
+;@Ahk2Exe-SetProductName YouTube Downloader
+;@Ahk2Exe-SetDescription Einfach Videos von YouTube runterladen
+;@Ahk2Exe-SetCompanyName Rekow IT
+;@Ahk2Exe-SetCopyright Copyright © 2026 Rekow IT
+;@Ahk2Exe-SetVersion 1.3
+;@Ahk2Exe-SetLanguage 0x0807
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 #NoTrayIcon
 
-;
-; TODO:
+; =================== TODO ===================
 ;	- Modify RunOther() function to delete all local dependencies and trigger a re-download.
 ;
 
-
-
 ; ================== CONFIG ==================
-urlScriptName := "yt-dlp.exe"    ; called once per URL, %1 = URL
-urlScriptPath := A_ScriptDir "\" urlScriptName
-iniSection    := "UI"
-iniKey        := "Browser"
-versionInfo   := "v1.2"
 ; ---- Version requirement ----
 global DENO_MIN_MAJOR := 2
-global DENO_MIN_MINOR := 0   ; requires >= 2.0.x
+global DENO_MIN_MINOR := 0   ; We require Deno version >= 2.0.x
 
-; ---- URLs (fixed) ----
-; Correct GitHub pattern for "latest asset":
-global DENO_URL := "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip"
-global FFMPEG_URL := "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-global YTDLP_URL := "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+; ---- URLs of dependencies ----
+global DENO_URL     := "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip"
+global FFMPEG_URL   := "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+global YTDLP_URL    := "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
 
-; ---- Local targets (script folder) ----
-global LOCAL_DENO   := A_ScriptDir "\deno.exe"
-global LOCAL_FFMPEG := A_ScriptDir "\ffmpeg.exe"
-global LOCAL_YTDLP := A_ScriptDir "\yt-dlp.exe"
+; ---- Local target folders of dependencies ----
+global LOCAL_YTD    := A_AppData "\Programs\YouTube Downloader"
+global LOCAL_DENO   := LOCAL_YTD "\deno.exe"
+global LOCAL_FFMPEG := LOCAL_YTD "\ffmpeg.exe"
+global LOCAL_YTDLP  := LOCAL_YTD "\yt-dlp.exe"
+iniPath             := LOCAL_YTD "\settings.ini"
+iniSection          := "UI"
+iniKeyBrowser       := "Browser"
+versionInfo         := "v1.3"
 ; ===========================================
 
-; Get full path to the script file
-scriptPath := A_ScriptFullPath
 
-; Split into folder and filename without extension
-SplitPath scriptPath, , &dir, , &nameNoExt
-
-; Build name of settings file: YouTube Downloader.ini
-iniPath := dir "\" nameNoExt ".ini"
+; Check folders and permissions
+try {
+	if !DirExist(LOCAL_YTD) {
+		DirCreate(LOCAL_YTD)
+	}
+} catch Error as err {
+	MsgBox "Der Ordner für die Abhängigkeiten konnte nicht erstellt werden:`r`n" err.Message
+}
 
 installedDependencies := IniRead(iniPath, iniSection, "InstalledDependencies", "")
 
@@ -112,7 +116,7 @@ ProgressGuiCreate(title) {
 
 
 ; Read last selection (default = 1)
-last := IniRead(iniPath, iniSection, iniKey, "1")
+last := IniRead(iniPath, iniSection, iniKeyBrowser, "1")
 last := (last ~= "^[1234]$") ? Integer(last) : 1
 
 ; Read fallback browser version
@@ -169,7 +173,7 @@ mainGui.OnEvent("Size", OnGuiSize)
 
 ; Save settings only on close
 mainGui.OnEvent("Close", (*) => (
-    IniWrite(GetSelected(), iniPath, iniSection, iniKey),
+    IniWrite(GetSelected(), iniPath, iniSection, iniKeyBrowser),
     ExitApp()
 ))
 
@@ -299,9 +303,9 @@ ShowAbout(*) {
 }
 
 SaveSettings(*) {
-	global last, iniPath, iniSection, iniKey
+	global last, iniPath, iniSection, iniKeyBrowser
 	last := GetSelected()
-	IniWrite(last, iniPath, iniSection, iniKey)
+	IniWrite(last, iniPath, iniSection, iniKeyBrowser)
 }
 
 SaveFallbackVersion(fallbackVersion) {
@@ -310,9 +314,17 @@ SaveFallbackVersion(fallbackVersion) {
 }
 
 RunUrls(*) {
-    global urlsEdit, statusLeft, logEdit, urlScriptPath, last
+    global urlsEdit, statusLeft, logEdit, LOCAL_YTDLP, last
 
 	downloadsDir := GetDownloadsDir()
+	
+	try {
+		if !DirExist(downloadsDir) {
+			DirCreate(downloadsDir)
+		}
+	} catch Error as err {
+		MsgBox "Der Downloads-Ordner konnte nicht erstellt werden:`r`n" err.Message
+	}
 	
 	switch last {
 		case 1:
@@ -330,8 +342,8 @@ RunUrls(*) {
         MsgBox "Keine URLs gefunden.", "YouTube Downloader", 0x30
         return
     }
-    if !FileExist(urlScriptPath) {
-        MsgBox "yt-dlp.exe nicht gefunden:`r`n" urlScriptPath "`r`nBitte erst updaten.", "YouTube Downloader", 0x10
+    if !FileExist(LOCAL_YTDLP) {
+        MsgBox "yt-dlp.exe nicht gefunden:`r`n" LOCAL_YTDLP "`r`nBitte erst updaten.", "YouTube Downloader", 0x10
         return
     }
 
@@ -344,7 +356,7 @@ RunUrls(*) {
         AppendLog(logEdit, "[" idx "/" urls.Length "] " url "`r`n")
 
         ; Run yt-dlp.exe
-		cmd := urlScriptPath " " cookiesFromBrowser " --buffer-size 64K --http-chunk-size 1M --windows-filenames --concurrent-fragments 10 -o %(fulltitle)s.%(ext)s " url
+		cmd := LOCAL_YTDLP " " cookiesFromBrowser " --buffer-size 64K --http-chunk-size 1M --windows-filenames --concurrent-fragments 10 -o %(fulltitle)s.%(ext)s " url
         exitCode := RunWait(cmd, downloadsDir, "Hide")
 
         if (exitCode = 0) {
@@ -361,18 +373,18 @@ RunUrls(*) {
 }
 
 RunOther(*) {
-    global YTDLP_URL, statusLeft, logEdit, urlScriptPath
+    global YTDLP_URL, statusLeft, logEdit, LOCAL_YTDLP
 
     SetBusy(true)
     statusLeft.Value := "Update ..."
     AppendLog(logEdit, "=== Update yt-dlp: " FormatTime(, "yyyy-MM-dd HH:mm:ss") " ===`r`n")
 
-    if !FileExist(urlScriptPath) {
-        AppendLog(logEdit, "yt-dlp.exe nicht gefunden: " urlScriptPath "`r`nEs wird versucht, yt-dlp.exe herunterzuladen.`r`n")
+    if !FileExist(LOCAL_YTDLP) {
+        AppendLog(logEdit, "yt-dlp.exe nicht gefunden: " LOCAL_YTDLP "`r`nEs wird versucht, yt-dlp.exe herunterzuladen.`r`n")
 		url := YTDLP_URL
 
 		try {
-			HttpDownload(url, urlScriptPath)
+			HttpDownload(url, LOCAL_YTDLP)
 			statusLeft.Value := "Erledigt."
 			AppendLog(logEdit, "  -> OK`r`n")
 		} catch as e {
@@ -380,8 +392,8 @@ RunOther(*) {
 			AppendLog(logEdit, "  -> Fehler:`r`n" e.Message "`r`n")
 		}
     } else {
-		cmd := urlScriptPath " -U"
-		exitCode := RunWait(cmd, A_ScriptDir, "Hide")
+		cmd := LOCAL_YTDLP " -U"
+		exitCode := RunWait(cmd, LOCAL_YTD, "Hide")
 
 		if (exitCode = 0) {
 			statusLeft.Value := "Erledigt."
@@ -392,8 +404,8 @@ RunOther(*) {
 		}
 	}
 	
-	if FileExist(urlScriptPath ":Zone.Identifier") {
-		zone := urlScriptPath ":Zone.Identifier"
+	if FileExist(LOCAL_YTDLP ":Zone.Identifier") {
+		zone := LOCAL_YTDLP ":Zone.Identifier"
 
 		try {
 			FileDelete zone
@@ -474,7 +486,7 @@ GetDownloadsDir() {
     userProfile := EnvGet("USERPROFILE")
     return userProfile != ""
         ? userProfile "\Downloads"
-        : A_ScriptDir
+        : LOCAL_YTD "\Downloads"
 }
 
 GUIDFromString(guidStr) {
@@ -676,7 +688,7 @@ EnsureDenoLocalOnly(pg) {
     try {
         if FileExist(LOCAL_DENO)
             FileDelete(LOCAL_DENO)
-        ExtractSingleFileFromZipShell(tempZip, A_ScriptDir, "deno.exe", 100000)
+        ExtractSingleFileFromZipShell(tempZip, LOCAL_YTD, "deno.exe", 100000)
     } catch as e {
         try FileDelete(tempZip)
         pg.Update(33, "Deno Installation fehlgeschlagen.")
@@ -748,7 +760,7 @@ EnsureFfmpegLocalOnly(pg) {
     try {
         if FileExist(LOCAL_FFMPEG)
             FileDelete(LOCAL_FFMPEG)
-        ExtractSingleFileFromZipShell(tempZip, A_ScriptDir, "ffmpeg.exe", 100000)
+        ExtractSingleFileFromZipShell(tempZip, LOCAL_YTD, "ffmpeg.exe", 100000)
     } catch as e {
         try FileDelete(tempZip)
         pg.Update(66, "FFmpeg Installation fehlgeschlagen.")
@@ -843,8 +855,9 @@ EnsureYtdlpLocalOnly(pg) {
     return { ok: false, message: "yt-dlp erfolgreich installiert, aber Validierung fehlgeschlagen.`r`n" r2.message }
 }
 
-TryRunYtdlp(ytdlpPath) {
-    exec := ExecCaptureCP(ytdlpPath, "--version", 4000)
+TryRunYtdlp(*) {
+	global LOCAL_YTDLP
+    exec := ExecCaptureCP(LOCAL_YTDLP, "--version", 4000)
 
     if (exec.timedOut)
         return { ok: false, message: "Timeout nach 8000 ms" }
@@ -890,7 +903,7 @@ SilentDownload(url, outPath) {
 
 
 MoveYtdlpFromTemp(sourceFile, timeoutMs := 120000) {
-	destFile   := A_ScriptDir "\yt-dlp.exe"
+	global LOCAL_YTDLP
 
     start := A_TickCount
     while !FileExist(sourceFile) {
@@ -904,7 +917,7 @@ MoveYtdlpFromTemp(sourceFile, timeoutMs := 120000) {
     UnblockFile(sourceFile)
 
 	try {
-		FileMove(sourceFile, destFile, true)
+		FileMove(sourceFile, LOCAL_YTDLP, true)
 	} catch Error as e {
 		throw Error("Installation of yt-dlp failed:`r`n" e.Message)
 	}
