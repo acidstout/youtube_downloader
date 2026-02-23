@@ -3,7 +3,7 @@
 ;@Ahk2Exe-SetDescription Einfach Videos von YouTube runterladen
 ;@Ahk2Exe-SetCompanyName Rekow IT
 ;@Ahk2Exe-SetCopyright Copyright © 2026 Rekow IT
-;@Ahk2Exe-SetVersion 1.3
+;@Ahk2Exe-SetVersion 1.3.1
 ;@Ahk2Exe-SetLanguage 0x0807
 #Requires AutoHotkey v2.0
 #SingleInstance Force
@@ -31,9 +31,115 @@ global LOCAL_YTDLP  := LOCAL_YTD "\yt-dlp.exe"
 iniPath             := LOCAL_YTD "\settings.ini"
 iniSection          := "UI"
 iniKeyBrowser       := "Browser"
-versionInfo         := "v1.3"
+versionInfo         := "v1.3.1"
+
+; ---- i18n ----
+global LANG_DIR := A_ScriptDir "\lang"
+global LANG_FALLBACK := "en"
+global I18N := Map()
+global I18N_MISSING := Map()
+global I18N_DEBUG := true   ; set to false for release builds
+global CUR_LANG := ""
+global iniKeyLang := "Lang"
+
+
+; Display name -> lang tag (file name)
+; ---- Language discovery ----
+global LANGS := Map()          ; DisplayName -> Code
+global LANG_FILES := Map()     ; Code -> FullPath
+
+InitLanguages() {
+    global LANGS, LANG_FILES, LANG_DIR
+
+    LANGS := Map()
+    LANG_FILES := Map()
+
+    tempList := []   ; array of { name, code }
+
+    if !DirExist(LANG_DIR) {
+        tempList.Push({ name: "English", code: "en" })
+    } else {
+        loop files LANG_DIR "\*.ini" {
+            filePath := A_LoopFileFullPath
+            code := RegExReplace(A_LoopFileName, "\.ini$", "")
+
+            ; Read display name from file
+            display := ""
+
+            try display := IniRead(filePath, "meta", "name", "")
+            if (display = "")
+                display := IniRead(filePath, "strings", "app.title", "")
+            if (display = "")
+                display := code
+
+            tempList.Push({ name: display, code: code })
+            LANG_FILES[code] := filePath
+        }
+    }
+
+	; --- Sort alphabetically by display name ---
+	Loop tempList.Length {
+		i := A_Index
+		Loop tempList.Length - i {
+			j := A_Index
+			if (StrCompare(tempList[j].name, tempList[j+1].name) > 0) {
+				tmp := tempList[j]
+				tempList[j] := tempList[j+1]
+				tempList[j+1] := tmp
+			}
+		}
+	}
+	
+    ; --- Rebuild LANGS map in sorted order ---
+    for item in tempList
+        LANGS[item.name] := item.code
+}
+
+LangCodeToName(code) {
+    global LANG_FILES
+
+    if !LANG_FILES.Has(code)
+        return code
+
+    filePath := LANG_FILES[code]
+
+    ; Preferred: [meta] name=Deutsch / English / ...
+    try {
+        name := IniRead(filePath, "meta", "name", "")
+        if (name != "")
+            return name
+    }
+
+    ; Fallback: use app title from [strings]
+    try {
+        title := IniRead(filePath, "strings", "app.title", "")
+        if (title != "")
+            return title
+    }
+
+    ; Final fallback: raw code
+    return code
+}
 ; ===========================================
 
+InitLanguages()
+; Load translations early so startup UI can use T()
+EarlyInitI18N()
+
+EarlyInitI18N() {
+    global CUR_LANG, iniPath, iniSection, iniKeyLang, LANG_FALLBACK
+    tag := IniRead(iniPath, iniSection, iniKeyLang, "")
+    if (tag = "")
+        tag := GuessOsLangTag()
+    if !LangTagAvailable(tag)
+        tag := LANG_FALLBACK
+    if !LangTagAvailable(tag)
+        tag := FirstAvailableLangTag()
+    CUR_LANG := tag
+    LoadI18N(tag)
+}
+
+OnExit(LogMissingTranslations)
 
 ; Check folders and permissions
 try {
@@ -41,7 +147,7 @@ try {
 		DirCreate(LOCAL_YTD)
 	}
 } catch Error as err {
-	MsgBox "Der Ordner für die Abhängigkeiten konnte nicht erstellt werden:`r`n" err.Message
+	MsgBox T("err.dep_folder", err.Message), T("app.title"), 0x10
 }
 
 installedDependencies := IniRead(iniPath, iniSection, "InstalledDependencies", "")
@@ -51,44 +157,48 @@ if (installedDependencies != "1") {
 }
 
 CheckAndDownloadDependencies() {
-	; ---- Progress GUI ----
-	pg := ProgressGuiCreate("YouTube Downloader: Abhängigkeiten prüfen/installieren")
-	pg.Update(0, "Starte ...")
+    global iniPath, iniSection
 
-	overallOk := true
-	msg := ""
+    ; ---- Progress GUI ----
+    pg := ProgressGuiCreate(T("dep.pg.title"))
+    pg.Update(0, T("dep.pg.start"))
 
-	; Step plan:
-	; 0-33  : Deno (download, extract, validate)
-	; 34-66 : FFmpeg (download, extract single exe, validate)
-	; 67-100: yt-dlp (download single exe, validate)
+    overallOk := true
+    msg := ""
 
-	r1 := EnsureDenoLocalOnly(pg)
-	overallOk := overallOk && r1.ok
-	msg .= "Deno: " (r1.ok ? "OK" : "FAIL") "`r`n" r1.message "`r`n`r`n"
+    r1 := EnsureDenoLocalOnly(pg)
+    overallOk := overallOk && r1.ok
+    msg .= T("dep.summary.deno", r1.ok ? T("dep.result.ok") : T("dep.result.fail"), r1.message)
+	
 
-	r2 := EnsureFfmpegLocalOnly(pg)
-	overallOk := overallOk && r2.ok
-	msg .= "FFmpeg: " (r2.ok ? "OK" : "FAIL") "`r`n" r2.message
+    r2 := EnsureFfmpegLocalOnly(pg)
+    overallOk := overallOk && r2.ok
+    msg .= T("dep.summary.ffmpeg", r2.ok ? T("dep.result.ok") : T("dep.result.fail"), r2.message)
 
-	r3 := EnsureYtdlpLocalOnly(pg)
-	overallOk := overallOk && r3.ok
-	msg .= "yt-dlp: " (r3.ok ? "OK" : "FAIL") "`r`n" r3.message
+    r3 := EnsureYtdlpLocalOnly(pg)
+    overallOk := overallOk && r3.ok
+    msg .= T("dep.summary.ytdlp", r3.ok ? T("dep.result.ok") : T("dep.result.fail"), r3.message)
 
-	pg.Update(100, overallOk ? "Erledigt." : "Erledigt mit Fehlern.")
-	Sleep 350
-	pg.Close()
+    pg.Update(100, overallOk ? T("dep.pg.done") : T("dep.pg.done_errors"))
+    Sleep 350
+    pg.Close()
 
-	if (overallOk) {
-		IniWrite("1", iniPath, iniSection, "InstalledDependencies")
-	}
+    if (overallOk) {
+        IniWrite("1", iniPath, iniSection, "InstalledDependencies")
+    } else {
+        ; Optional: show the summary in user's language
+        ; MsgBox msg, T("app.title"), 0x10
+        ; Or log it somewhere
+    }
 }
-
 ; =========================
 ; Simple progress GUI
 ; =========================
 class ProgressGui {
-    __New(title := "Fortschritt") {
+	__New(title := "") {
+        if (title = "")
+            title := T("dep.pg.title")
+			
         this.Gui := Gui("+AlwaysOnTop -MinimizeBox -MaximizeBox", title)
         this.Gui.MarginX := 12
         this.Gui.MarginY := 10
@@ -127,14 +237,23 @@ if (fallbackVersion == "") {
 }
 
 ; ---------- GUI ----------
-mainGui := Gui("+Resize +MinSize500x360", "YouTube Downloader")
+mainGui := Gui("+Resize +MinSize500x360", T("app.title"))
 mainGui.MarginX := 12
 mainGui.MarginY := 12
 mainGui.SetFont("s10", "Segoe UI")
 ; mainGui.Opt("+E0x02000000")  ; WS_EX_COMPOSITED: Use compositing, which might be sluggish and therefore is commented out.
 
+; Language picker (bottom-right, positioned in OnGuiSize)
+langItems := []
+for dispName, _ in LANGS
+    langItems.Push(dispName)
+
+ddlLang := mainGui.AddDropDownList("w170", langItems)
+ddlLang.OnEvent("Change", LangChanged)
+InitLanguage(ddlLang)
+
 ; Add radio-buttons for browser selection
-grp    := mainGui.Add("GroupBox", "x10 y10 w360 h48", "Nutze Session-Cookies von")
+grp := mainGui.Add("GroupBox", "x10 y10 w360 h48", T("grp.cookies"))
 r1     := mainGui.Add("Radio", "x20 y30",  "Chrome")
 r2     := mainGui.Add("Radio", "xp+90 yp", "Edge")
 r3     := mainGui.Add("Radio", "xp+90 yp", "Firefox")
@@ -147,20 +266,23 @@ for r in [r1, r2, r3, r4] {
     r.OnEvent("Click", SaveSettings)
 }
 
-lblUrls  := mainGui.AddText(, "YouTube URLs einfügen (eine pro Zeile):")
+lblUrls := mainGui.AddText(, T("lbl.urls"))
 urlsEdit := mainGui.AddEdit("vUrls WantTab Multi -Wrap VScroll")
 
-lblLog  := mainGui.AddText(, "Protokoll:")
+lblLog := mainGui.AddText(, T("lbl.log"))
 logEdit := mainGui.AddEdit("ReadOnly +Multi -Wrap HScroll VScroll vLog")
 
-statusLeft  := mainGui.AddText(, "Bereit.")
+statusLeft := mainGui.AddText(, T("status.ready"))
 statusRight := mainGui.AddText(, versionInfo)
 statusRight.Opt("+Right")
 statusRight.OnEvent("Click", ShowAbout)
 
 btnRunUrls  := mainGui.AddButton(, "Download")
 btnOther    := mainGui.AddButton(, "Update")
-btnClearLog := mainGui.AddButton(, "Protokoll leeren")
+btnClearLog := mainGui.AddButton(, T("btn.clearlog"))
+
+; Apply i18n translation
+ApplyUiText()
 
 btnRunUrls.OnEvent("Click", RunUrls)
 btnOther.OnEvent("Click", RunOther)
@@ -182,7 +304,7 @@ return
 
 ; ---------- Layout ----------
 OnGuiSize(thisGui, minMax, newW, newH) {
-	global lblUrls, urlsEdit, lblLog, logEdit, statusLeft, statusRight, btnRunUrls, btnOther, btnClearLog
+	global lblUrls, urlsEdit, lblLog, logEdit, statusLeft, statusRight, btnRunUrls, btnOther, btnClearLog, ddlLang
 
     if (minMax = -1) ; minimized
         return
@@ -258,14 +380,20 @@ OnGuiSize(thisGui, minMax, newW, newH) {
 
 		; Status line below buttons
 		statusY := btnY + btnH + gap
-		rightW := 160          ; fixed width for the bottom-right static text
+
+		ddlW := 170
+		statusRightW := 90
 		statusGap := 10
+		ddlGap := 10
 
-		; Left status takes remaining space, stays left-aligned
-		statusLeft.Move(x, statusY, usableW - rightW - statusGap, 20)
+		; Put language picker at the far right
+		ddlLang.Move(x + usableW - ddlW, statusY - 2, ddlW)
 
-		; Right status is right-aligned and fixed width
-		statusRight.Move(x + usableW - rightW, statusY, rightW, 20)
+		; Version text just left of the language picker
+		statusRight.Move(x + usableW - ddlW - ddlGap - statusRightW, statusY, statusRightW, 20)
+
+		; Left status uses remaining space
+		statusLeft.Move(x, statusY, usableW - ddlW - ddlGap - statusRightW - statusGap, 20)
 		
 		; Position radio-buttons and GroupBox
 		marginLeft   := 13
@@ -296,10 +424,38 @@ OnGuiSize(thisGui, minMax, newW, newH) {
 }
 
 ; ---------- Actions ----------
+ApplyUiText() {
+    global mainGui, grp, lblUrls, lblLog, statusLeft
+    global btnRunUrls, btnOther, btnClearLog
+
+    mainGui.Title := T("app.title")
+    grp.Text := T("grp.cookies")
+    lblUrls.Text := T("lbl.urls")
+    lblLog.Text := T("lbl.log")
+    statusLeft.Text := T("status.ready")
+
+    btnRunUrls.Text := T("btn.download")
+    btnOther.Text := T("btn.update")
+    btnClearLog.Text := T("btn.clearlog")
+}
+
+LangChanged(*) {
+    global ddlLang, LANGS, CUR_LANG, iniPath, iniSection, iniKeyLang
+
+    disp := ddlLang.Text
+    tag := LANGS.Has(disp) ? LANGS[disp] : "en"
+    if (tag = CUR_LANG)
+        return
+
+    CUR_LANG := tag
+    IniWrite(tag, iniPath, iniSection, iniKeyLang)
+    LoadI18N(tag)
+    ApplyUiText()
+}
+
 ShowAbout(*) {
-	global versionInfo
-	MsgBox "YouTube Downloader`r`nVersion " versionInfo "`r`n`r`nCopyright © 2026 by Rekow IT`r`nhttps://rekow.ch`r`n`r`nAlle Rechte vorbehalten.", "Über", 0x40
-	return
+    global versionInfo
+    MsgBox T("about.text", versionInfo), T("about.title"), 0x40
 }
 
 SaveSettings(*) {
@@ -323,7 +479,7 @@ RunUrls(*) {
 			DirCreate(downloadsDir)
 		}
 	} catch Error as err {
-		MsgBox "Der Downloads-Ordner konnte nicht erstellt werden:`r`n" err.Message
+		MsgBox T("err.downloads_folder", err.Message), T("app.title"), 0x10
 	}
 	
 	switch last {
@@ -339,20 +495,20 @@ RunUrls(*) {
 	
     urls := ParseUrls(urlsEdit.Value)
     if (urls.Length = 0) {
-        MsgBox "Keine URLs gefunden.", "YouTube Downloader", 0x30
+        MsgBox T("err.no_urls"), T("app.title"), 0x30
         return
     }
     if !FileExist(LOCAL_YTDLP) {
-        MsgBox "yt-dlp.exe nicht gefunden:`r`n" LOCAL_YTDLP "`r`nBitte erst updaten.", "YouTube Downloader", 0x10
+        MsgBox T("err.ytdlp_missing", LOCAL_YTDLP), T("app.title"), 0x10
         return
     }
 
     SetBusy(true)
-    AppendLog(logEdit, "=== Download gestartet: " FormatTime(, "yyyy-MM-dd HH:mm:ss") " ===`r`n")
+    AppendLog(logEdit, T("log.download_started", FormatTime(, "yyyy-MM-dd HH:mm:ss")) "`r`n")
 
     ok := 0
     for idx, url in urls {
-        statusLeft.Value := "Lade " idx "/" urls.Length ": " url
+        statusLeft.Value := T("status.downloading", idx, urls.Length, url)
         AppendLog(logEdit, "[" idx "/" urls.Length "] " url "`r`n")
 
         ; Run yt-dlp.exe
@@ -361,14 +517,14 @@ RunUrls(*) {
 
         if (exitCode = 0) {
             ok++
-            AppendLog(logEdit, "  -> OK`r`n")
+            AppendLog(logEdit, T("log.item_ok") "`r`n")
         } else {
-            AppendLog(logEdit, "  -> Fehler #" exitCode "`r`n")
+            AppendLog(logEdit, T("log.item_error", exitCode) "`r`n")
         }
     }
 
-    statusLeft.Value := "Erledigt. " ok "/" urls.Length " erfolgreich."
-    AppendLog(logEdit, "=== Erledigt: " ok "/" urls.Length " erfolgreich ===`r`n")
+    statusLeft.Value := T("status.finished", ok, urls.Length)
+	AppendLog(logEdit, T("log.download_done", ok, urls.Length) "`r`n")
     SetBusy(false)
 }
 
@@ -376,31 +532,31 @@ RunOther(*) {
     global YTDLP_URL, statusLeft, logEdit, LOCAL_YTDLP
 
     SetBusy(true)
-    statusLeft.Value := "Update ..."
-    AppendLog(logEdit, "=== Update yt-dlp: " FormatTime(, "yyyy-MM-dd HH:mm:ss") " ===`r`n")
+	statusLeft.Value := T("status.update")
+	AppendLog(logEdit, T("log.update_header", FormatTime(, "yyyy-MM-dd HH:mm:ss")) "`r`n")
 
     if !FileExist(LOCAL_YTDLP) {
-        AppendLog(logEdit, "yt-dlp.exe nicht gefunden: " LOCAL_YTDLP "`r`nEs wird versucht, yt-dlp.exe herunterzuladen.`r`n")
+        AppendLog(logEdit, T("log.ytdlp_missing_try_download", LOCAL_YTDLP))
 		url := YTDLP_URL
 
 		try {
 			HttpDownload(url, LOCAL_YTDLP)
-			statusLeft.Value := "Erledigt."
-			AppendLog(logEdit, "  -> OK`r`n")
+			statusLeft.Value := T("status.done")
+			AppendLog(logEdit, T("log.item_ok") "`r`n")
 		} catch as e {
-			statusLeft.Value := "Fehler!"
-			AppendLog(logEdit, "  -> Fehler:`r`n" e.Message "`r`n")
+			statusLeft.Value := T("status.error")
+			AppendLog(logEdit, "  -> " e.Message "`r`n")
 		}
     } else {
 		cmd := LOCAL_YTDLP " -U"
 		exitCode := RunWait(cmd, LOCAL_YTD, "Hide")
 
 		if (exitCode = 0) {
-			statusLeft.Value := "Erledigt."
-			AppendLog(logEdit, "  -> OK`r`n")
+			statusLeft.Value := T("status.done")
+			AppendLog(logEdit, T("log.item_ok") "`r`n")
 		} else {
-			statusLeft.Value := "Fehler!"
-			AppendLog(logEdit, "  -> Fehler #" exitCode "`r`n")
+			statusLeft.Value := T("status.error")
+			AppendLog(logEdit, "  -> " exitCode "`r`n")
 		}
 	}
 	
@@ -409,9 +565,9 @@ RunOther(*) {
 
 		try {
 			FileDelete zone
-			AppendLog(logEdit, "  -> yt-dlp.exe wurde als sicher markiert.`r`n")
+			AppendLog(logEdit, T("log.file_marked_safe"))
 		} catch {
-			AppendLog(logEdit, "  -> yt-dlp.exe ist bereits sicher.`r`n")
+			AppendLog(logEdit, T("log.file_already_safe"))
 		}
 	}
 	
@@ -493,7 +649,7 @@ GUIDFromString(guidStr) {
     buf := Buffer(16, 0)
     hr := DllCall("Ole32\CLSIDFromString", "wstr", guidStr, "ptr", buf)
     if (hr != 0)
-        throw Error("Invalid GUID: " guidStr)
+        throw Error(T("err.invalid_guid", guidStr))
     return buf
 }
 
@@ -536,94 +692,97 @@ GetFileVersion(filePath) {
 
 ; Get user's browser user-agent
 GetBrowserUserAgent() {
-	global logEdit, last, fallbackVersion
-	
-	userAgentChrome1    := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/"
-	userAgentChrome2    := " Safari/537.36"
-	
-	userAgentFirefox1   := "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:"
-	userAgentFirefox2   := ") Gecko/20100101"
-	
-	browserVersion      := fallbackVersion
-	userAgentPart1      := userAgentChrome1
-	userAgentPart2      := userAgentChrome2
-	userAgentPart3      := ""
+    global logEdit, last, fallbackVersion
 
-	switch last {
-		case 1:
-			; Chrome
-			userAgentPart1 := userAgentChrome1
-			userAgentPart2 := userAgentChrome2
-			userAgentPart3 := ""
-			try {
-				; Search for Chrome
+    userAgentChrome1  := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/"
+    userAgentChrome2  := " Safari/537.36"
+
+    userAgentFirefox1 := "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:"
+    userAgentFirefox2 := ") Gecko/20100101"
+
+    browserVersion := fallbackVersion
+    userAgentPart1 := userAgentChrome1
+    userAgentPart2 := userAgentChrome2
+    userAgentPart3 := ""
+
+    browserFile := ""
+
+    switch last {
+        case 1:
+            ; Chrome
+            userAgentPart1 := userAgentChrome1
+            userAgentPart2 := userAgentChrome2
+            userAgentPart3 := ""
+            try {
 				browserFile := RegRead("HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe", "")
 			} catch {
-				AppendLog(logEdit, "  -> Chrome nicht gefunden.`r`n")
+				AppendLog(logEdit, T("log.browser_not_found", "Chrome") "`r`n")
 			}
-			
-		case 2:
-			; Edge
-			userAgentPart1 := userAgentChrome1
-			userAgentPart2 := userAgentChrome2
-			userAgentPart3 := " Edg/"
-			try {
-				; Search for Edge
+
+        case 2:
+            ; Edge
+            userAgentPart1 := userAgentChrome1
+            userAgentPart2 := userAgentChrome2
+            userAgentPart3 := " Edg/"
+            try {
 				browserFile := RegRead("HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe", "")
 			} catch {
-				AppendLog(logEdit, "  -> Edge nicht gefunden.`r`n")
+				AppendLog(logEdit, T("log.browser_not_found", "Edge") "`r`n")
 			}
-			
-		case 3:
-			; Firefox
-			userAgentPart1 := userAgentFirefox1
-			userAgentPart2 := userAgentFirefox2
-			userAgentPart3 := "Firefox/"
-			try {
-				; Search for Firefox
+
+        case 3:
+            ; Firefox
+            userAgentPart1 := userAgentFirefox1
+            userAgentPart2 := userAgentFirefox2
+            userAgentPart3 := "Firefox/"
+            try {
 				browserFile := RegRead("HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe", "")
 			} catch {
-				AppendLog(logEdit, "  -> Firefox nicht gefunden.`r`n")
-			}			
-			
-		default:
-			; Fallback
-			browserFile := ""
-	}
+				AppendLog(logEdit, T("log.browser_not_found", "Firefox") "`r`n")
+			}
 
-	if (browserFile != "") {
-		AppendLog(logEdit, "  -> Habe " browserFile " gefunden.`r`n")
-		try {
-			browserVersion := GetFileVersion(browserFile)
-		} catch as e {
-			AppendLog(logEdit, "  -> Konnte User-Agent nicht ermitteln. Nutze Standard.`r`n")
-		}
-	}
+        default:
+            browserFile := ""
+    }
 
-	; Append Edge version if we have Edge.
-	if (userAgentPart3 != "") {
-		userAgentPart3 .= browserVersion
-	}
+    if (browserFile != "") {
+        AppendLog(logEdit, T("log.browser_found", browserFile) "`r`n")
+        try {
+            browserVersion := GetFileVersion(browserFile)
+        } catch as e {
+            AppendLog(logEdit, T("log.ua_detect_failed_using_fallback") "`r`n")
+        }
+    }
 
-	if (browserVersion != "") {
-		SaveFallbackVersion(browserVersion)
-		browserVersion := userAgentPart1 browserVersion userAgentPart2 userAgentPart3
-	} else {
-		AppendLog(logEdit, "  -> Unbekannte Browser-Version: '" browserVersion "'`r`n")
-		browserVersion := userAgentChrome1 fallbackVersion userAgentChrome2
-	}
-	AppendLog(logEdit, "  -> User-Agent: " browserVersion "`r`n")
+    ; Append Edge version if we have Edge.
+    if (userAgentPart3 != "")
+        userAgentPart3 .= browserVersion
 
-	return browserVersion
+    if (browserVersion != "") {
+        SaveFallbackVersion(browserVersion)
+        browserVersion := userAgentPart1 browserVersion userAgentPart2 userAgentPart3
+    } else {
+        AppendLog(logEdit, T("log.ua_unknown_version", browserVersion) "`r`n")
+        browserVersion := userAgentChrome1 fallbackVersion userAgentChrome2
+    }
+
+    AppendLog(logEdit, T("log.ua", browserVersion) "`r`n")
+    return browserVersion
 }
 
 ; Download helper
 HttpDownload(url, savePath) {
-	userAgent := GetBrowserUserAgent()
+    userAgent := GetBrowserUserAgent()
+
     ; Ensure target directory exists
     SplitPath savePath, , &dir
-    if (dir)
-        DirCreate dir
+    if (dir) {
+        try {
+			DirCreate dir
+		} catch as e {
+			throw Error(T("err.create_dir_failed", dir, e.Message))
+		}
+	}
 
     req := ComObject("WinHttp.WinHttpRequest.5.1")
     req.Option[6] := true ; Enable redirects
@@ -634,7 +793,7 @@ HttpDownload(url, savePath) {
 
     status := req.Status
     if (status < 200 || status >= 300)
-        throw Error("HTTP error " status ": " req.StatusText)
+        throw Error(T("err.http_error", status, req.StatusText, url))
 
     stream := ComObject("ADODB.Stream")
     stream.Type := 1 ; binary
@@ -643,7 +802,6 @@ HttpDownload(url, savePath) {
     stream.SaveToFile(savePath, 2) ; overwrite
     stream.Close()
 }
-
 
 ; Get selected radio-button to save in settings
 GetSelected() {
@@ -662,65 +820,71 @@ GetSelected() {
 ; =========================
 EnsureDenoLocalOnly(pg) {
     global DENO_URL, LOCAL_DENO, DENO_MIN_MAJOR, DENO_MIN_MINOR
-
-    pg.Update(5, "Suche Deno ...")
+    pg.Update(5, T("dep.step.search_deno"))
 
     if FileExist(LOCAL_DENO) {
-		WaitForFileStable(LOCAL_DENO, 10000)
+        WaitForFileStable(LOCAL_DENO, 10000)
         v := TryRunDenoVersion(LOCAL_DENO)
         if v.ok && VersionAtLeast(v.major, v.minor, DENO_MIN_MAJOR, DENO_MIN_MINOR) {
-            pg.Update(50, "Deno OK.")
-            return { ok: true, message: "Gefunden.`r`nPfad: " LOCAL_DENO "`r`nVersion: " v.major "." v.minor "." v.patch }
+            pg.Update(50, T("dep.step.ok_deno"))
+            return { ok: true, message: T("dep.msg.found", LOCAL_DENO, v.major "." v.minor "." v.patch) }
         }
-        ; present but too old/broken => reinstall
     }
 
-    ; Install/reinstall from ZIP
-    pg.Update(10, "Downloade Deno...")
+    pg.Update(10, T("dep.step.download_deno"))
     tempZip := A_Temp "\deno_" A_TickCount ".zip"
     if !SilentDownload(DENO_URL, tempZip) {
-        pg.Update(33, "Deno Download fehlgeschlagen.")
-        return { ok: false, message: "Konnte Deno nicht herunterladen.`r`nURL: " DENO_URL }
+        pg.Update(33, T("dep.step.download_failed_deno"))
+        return { ok: false, message: T("dep.msg.download_failed", "Deno", DENO_URL) }
     }
 
-    ; Extract only deno.exe out of the ZIP into script folder
-    pg.Update(20, "Installiere Deno ...")
+    pg.Update(20, T("dep.step.install_deno"))
     try {
         if FileExist(LOCAL_DENO)
             FileDelete(LOCAL_DENO)
         ExtractSingleFileFromZipShell(tempZip, LOCAL_YTD, "deno.exe", 100000)
     } catch as e {
         try FileDelete(tempZip)
-        pg.Update(33, "Deno Installation fehlgeschlagen.")
-        return { ok: false, message: "Deno konnte nicht installiert werden.`r`n" e.Message }
+        pg.Update(33, T("dep.step.install_failed_deno"))
+        return { ok: false, message: T("dep.msg.install_failed", "Deno", e.Message) }
     }
     try FileDelete(tempZip)
 
-    pg.Update(25, "Validiere Deno...")
-	WaitForFileStable(LOCAL_DENO, 10000)
+    pg.Update(25, T("dep.step.validate_deno"))
+    WaitForFileStable(LOCAL_DENO, 10000)
     v2 := TryRunDenoVersion(LOCAL_DENO)
+
     if !v2.ok {
-        pg.Update(33, "Deno Validierung fehlgeschlagen.")
-        return { ok: false, message: "Deno erfolgreich installiert, aber die Validierung schlug fehl.`r`n" v2.message }
-    }
-    if !VersionAtLeast(v2.major, v2.minor, DENO_MIN_MAJOR, DENO_MIN_MINOR) {
-        pg.Update(33, "Deno Version zu alt.")
-        return { ok: false, message: "Deno erfolgreich installiert, aber die Version ist zu alt.`r`nGefunden: " v2.major "." v2.minor "." v2.patch "`r`nBenötigt: >= " DENO_MIN_MAJOR "." DENO_MIN_MINOR ".0" }
+        pg.Update(33, T("dep.step.validate_failed_deno"))
+        return { ok: false, message: T("dep.msg.validate_failed", "Deno", v2.message) }
     }
 
-    pg.Update(33, "Deno installiert.")
-    return { ok: true, message: "Deno installiert.`r`nPfad: " LOCAL_DENO "`r`nVersion: " v2.major "." v2.minor "." v2.patch }
+    if !VersionAtLeast(v2.major, v2.minor, DENO_MIN_MAJOR, DENO_MIN_MINOR) {
+        pg.Update(33, T("dep.step.too_old_deno"))
+        return { ok: false
+               , message: T("dep.msg.too_old"
+                           , "Deno"
+                           , v2.major "." v2.minor "." v2.patch
+                           , DENO_MIN_MAJOR "." DENO_MIN_MINOR ".0") }
+    }
+
+    pg.Update(33, T("dep.step.installed_deno"))
+    return { ok: true
+           , message: T("dep.msg.installed"
+                       , "Deno"
+                       , LOCAL_DENO
+                       , v2.major "." v2.minor "." v2.patch) }
 }
 
 TryRunDenoVersion(denoPath) {
     exec := ExecCaptureCP(denoPath, "--version", 4000)
 
     if (exec.timedOut)
-        return { ok: false, message: "Timeout nach 8000 ms" }
+        return { ok: false, message: T("err.timeout", 4000) }
 
     stdtext := Trim(exec.stdout) != "" ? exec.stdout : exec.stderr
     if (Trim(stdtext) = "")
-        return { ok: false, message: "Keine Ausgabe. ExitCode: " exec.exitCode }
+        return { ok: false, message: T("err.no_output_exitcode", exec.exitCode) }
 
     for line in StrSplit(stdtext, "`n", "`r") {
         line := Trim(line)
@@ -728,7 +892,7 @@ TryRunDenoVersion(denoPath) {
             return { ok: true, major: Integer(m[1]), minor: Integer(m[2]), patch: Integer(m[3]) }
     }
 
-    return { ok: false, message: "Konnte Version nicht parsen.`r`nExitCode: " exec.exitCode "`r`nAusgabe:`r`n" stdtext }
+    return { ok: false, message: T("err.parse_version_failed", exec.exitCode, stdtext) }
 }
 
 ; =========================
@@ -737,72 +901,73 @@ TryRunDenoVersion(denoPath) {
 EnsureFfmpegLocalOnly(pg) {
     global FFMPEG_URL, LOCAL_FFMPEG
 
-    pg.Update(34, "Suche FFmpeg ...")
+    pg.Update(34, T("dep.step.search_ffmpeg"))
 
     if FileExist(LOCAL_FFMPEG) {
-		WaitForFileStable(LOCAL_FFMPEG, 10000)
+        WaitForFileStable(LOCAL_FFMPEG, 10000)
         r := TryRunFfmpeg(LOCAL_FFMPEG)
         if r.ok {
-            pg.Update(66, "FFmpeg OK.")
-            return { ok: true, message: "Gefunden.`r`nPfad: " LOCAL_FFMPEG "`r`n" r.message }
+            pg.Update(66, T("dep.step.ok_ffmpeg"))
+            return { ok: true, message: T("dep.msg.found", LOCAL_FFMPEG, r.message) }
         }
         ; broken => reinstall
     }
 
-    pg.Update(40, "Downloade FFmpeg ...")
+    pg.Update(40, T("dep.step.download_ffmpeg"))
     tempZip := A_Temp "\ffmpeg_" A_TickCount ".zip"
     if !SilentDownload(FFMPEG_URL, tempZip) {
-        pg.Update(66, "FFmpeg Download fehlgeschlagen.")
-        return { ok: false, message: "Konnte FFmpeg nicht herunterladen.`r`nURL: " FFMPEG_URL }
+        pg.Update(66, T("dep.step.download_failed_ffmpeg"))
+        return { ok: false, message: T("dep.msg.download_failed", "FFmpeg", FFMPEG_URL) }
     }
 
-    pg.Update(50, "Installiere FFmpeg ...")
+    pg.Update(50, T("dep.step.install_ffmpeg"))
     try {
         if FileExist(LOCAL_FFMPEG)
             FileDelete(LOCAL_FFMPEG)
         ExtractSingleFileFromZipShell(tempZip, LOCAL_YTD, "ffmpeg.exe", 100000)
     } catch as e {
         try FileDelete(tempZip)
-        pg.Update(66, "FFmpeg Installation fehlgeschlagen.")
-        return { ok: false, message: "FFmpeg konnte nicht installiert werden.`r`n" e.Message }
+        pg.Update(66, T("dep.step.install_failed_ffmpeg"))
+        return { ok: false, message: T("dep.msg.install_failed", "FFmpeg", e.Message) }
     }
     try FileDelete(tempZip)
 
-    pg.Update(60, "Validiere FFmpeg ...")
-	WaitForFileStable(LOCAL_FFMPEG, 10000)
+    pg.Update(60, T("dep.step.validate_ffmpeg"))
+    WaitForFileStable(LOCAL_FFMPEG, 10000)
     r2 := TryRunFfmpeg(LOCAL_FFMPEG)
+
     if r2.ok {
-        pg.Update(66, "FFmpeg installiert.")
-        return { ok: true, message: "FFmpeg installiert.`r`nPfad: " LOCAL_FFMPEG "`r`n" r2.message }
+        pg.Update(66, T("dep.step.installed_ffmpeg"))
+        return { ok: true, message: T("dep.msg.installed", "FFmpeg", LOCAL_FFMPEG, r2.message) }
     }
 
-    pg.Update(66, "FFmpeg Validierung fehlgeschlagen.")
-    return { ok: false, message: "FFmpeg erfolgreich installiert, aber Validierung fehlgeschlagen.`r`n" r2.message }
+    pg.Update(66, T("dep.step.validate_failed_ffmpeg"))
+    return { ok: false, message: T("dep.msg.validate_failed", "FFmpeg", r2.message) }
 }
 
 TryRunFfmpeg(ffmpegPath) {
     exec := ExecCaptureCP(ffmpegPath, "-version", 4000)
 
     if (exec.timedOut)
-        return { ok: false, message: "Timeout nach 8000 ms" }
+        return { ok: false, message: T("err.timeout", 4000) }
 
     stdtext := Trim(exec.stdout) != "" ? exec.stdout : exec.stderr
     if (Trim(stdtext) = "")
-        return { ok: false, message: "Keine Ausgabe. ExitCode: " exec.exitCode }
+        return { ok: false, message: T("err.no_output_exitcode", exec.exitCode) }
 
     firstLine := ""
     for line in StrSplit(stdtext, "`n", "`r") {
         line := Trim(line)
         if (line != "") {
-			firstLine := line
-			break
-		}
+            firstLine := line
+            break
+        }
     }
 
     if RegExMatch(firstLine, "i)^ffmpeg\s+version\b")
         return { ok: true, message: firstLine }
 
-    return { ok: false, message: "FFmpeg Ausgabe unerwartet.`r`nExitCode: " exec.exitCode "`r`nAusgabe:`r`n" stdtext }
+    return { ok: false, message: T("err.unexpected_output", exec.exitCode, stdtext) }
 }
 
 
@@ -812,74 +977,79 @@ TryRunFfmpeg(ffmpegPath) {
 EnsureYtdlpLocalOnly(pg) {
     global YTDLP_URL, LOCAL_YTDLP
 
-    pg.Update(67, "Suche yt-dlp ...")
+    pg.Update(67, T("dep.step.search_ytdlp"))
 
     if FileExist(LOCAL_YTDLP) {
-		WaitForFileStable(LOCAL_YTDLP, 10000)
+        WaitForFileStable(LOCAL_YTDLP, 10000)
         r := TryRunYtdlp(LOCAL_YTDLP)
         if r.ok {
-            pg.Update(100, "yt-dlp OK.")
-            return { ok: true, message: "Gefunden.`r`nPfad: " LOCAL_YTDLP "`r`n" r.message }
+            pg.Update(100, T("dep.step.ok_ytdlp"))
+            return { ok: true
+                   , message: T("dep.msg.found", LOCAL_YTDLP, r.message) }
         }
         ; broken => reinstall
     }
 
-    pg.Update(70, "Downloade yt-dlp ...")
+    pg.Update(70, T("dep.step.download_ytdlp"))
     tempFile := A_Temp "\ytdlp_" A_TickCount ".exe"
     if !SilentDownload(YTDLP_URL, tempFile) {
-        pg.Update(100, "yt-dlp Download fehlgeschlagen.")
-        return { ok: false, message: "Konnte yt-dlp nicht herunterladen.`r`nURL: " YTDLP_URL }
+        pg.Update(100, T("dep.step.download_failed_ytdlp"))
+        return { ok: false
+               , message: T("dep.msg.download_failed", "yt-dlp", YTDLP_URL) }
     }
 
-    pg.Update(80, "Installiere yt-dlp ...")
+    pg.Update(80, T("dep.step.install_ytdlp"))
     try {
         if FileExist(LOCAL_YTDLP)
             FileDelete(LOCAL_YTDLP)
-			MoveYtdlpFromTemp(tempFile)
+        MoveYtdlpFromTemp(tempFile)
     } catch as e {
         try FileDelete(tempFile)
-        pg.Update(100, "yt-dlp Installation fehlgeschlagen.")
-        return { ok: false, message: "yt-dlp konnte nicht installiert werden.`r`n" e.Message }
+        pg.Update(100, T("dep.step.install_failed_ytdlp"))
+        return { ok: false
+               , message: T("dep.msg.install_failed", "yt-dlp", e.Message) }
     }
     try FileDelete(tempFile)
 
-    pg.Update(95, "Validiere yt-dlp ...")
-	WaitForFileStable(LOCAL_YTDLP, 10000)
+    pg.Update(95, T("dep.step.validate_ytdlp"))
+    WaitForFileStable(LOCAL_YTDLP, 10000)
     r2 := TryRunYtdlp(LOCAL_YTDLP)
+
     if r2.ok {
-        pg.Update(100, "yt-dlp installiert.")
-        return { ok: true, message: "yt-dlp installiert.`r`nPfad: " LOCAL_YTDLP "`r`n" r2.message }
+        pg.Update(100, T("dep.step.installed_ytdlp"))
+        return { ok: true
+               , message: T("dep.msg.installed", "yt-dlp", LOCAL_YTDLP, r2.message) }
     }
 
-    pg.Update(100, "yt-dlp Validierung fehlgeschlagen.")
-    return { ok: false, message: "yt-dlp erfolgreich installiert, aber Validierung fehlgeschlagen.`r`n" r2.message }
+    pg.Update(100, T("dep.step.validate_failed_ytdlp"))
+    return { ok: false
+           , message: T("dep.msg.validate_failed", "yt-dlp", r2.message) }
 }
 
-TryRunYtdlp(*) {
-	global LOCAL_YTDLP
-    exec := ExecCaptureCP(LOCAL_YTDLP, "--version", 4000)
+TryRunYtdlp(ytdlpPath) {
+    exec := ExecCaptureCP(ytdlpPath, "--version", 4000)
 
     if (exec.timedOut)
-        return { ok: false, message: "Timeout nach 8000 ms" }
+        return { ok: false, message: T("err.timeout", 4000) }
 
     stdtext := Trim(exec.stdout) != "" ? exec.stdout : exec.stderr
     if (Trim(stdtext) = "")
-        return { ok: false, message: "Keine Ausgabe. ExitCode: " exec.exitCode }
+        return { ok: false, message: T("err.no_output_exitcode", exec.exitCode) }
 
     firstLine := ""
     for line in StrSplit(stdtext, "`n", "`r") {
         line := Trim(line)
         if (line != "") {
-			firstLine := line
-			break
-		}
+            firstLine := line
+            break
+        }
     }
 
     if RegExMatch(firstLine, "^[0-9]{4}\.[0-9]{2}\.[0-9]{2}$")
         return { ok: true, message: firstLine }
 
-	;return { ok: true, message: firstLine }
-    return { ok: false, message: "yt-dlp Ausgabe unerwartet.`r`nExitCode: " exec.exitCode "`r`nAusgabe:`r`n" stdtext }
+    return { ok: false
+           , message: T("err.unexpected_output", exec.exitCode, stdtext) }
 }
 
 
@@ -903,12 +1073,12 @@ SilentDownload(url, outPath) {
 
 
 MoveYtdlpFromTemp(sourceFile, timeoutMs := 120000) {
-	global LOCAL_YTDLP
+    global LOCAL_YTDLP
 
     start := A_TickCount
     while !FileExist(sourceFile) {
         if (A_TickCount - start > timeoutMs)
-            throw Error("Timeout waiting for downloaded file: " sourceFile)
+            throw Error(T("err.wait_download_timeout", sourceFile, timeoutMs))
         Sleep 100
     }
 
@@ -916,11 +1086,11 @@ MoveYtdlpFromTemp(sourceFile, timeoutMs := 120000) {
     WaitForFileStable(sourceFile, timeoutMs)
     UnblockFile(sourceFile)
 
-	try {
-		FileMove(sourceFile, LOCAL_YTDLP, true)
-	} catch Error as e {
-		throw Error("Installation of yt-dlp failed:`r`n" e.Message)
-	}
+    try {
+        FileMove(sourceFile, LOCAL_YTDLP, true)
+    } catch Error as e {
+        throw Error(T("err.install_failed_with_reason", "yt-dlp", e.Message))
+    }
 }
 
 
@@ -929,26 +1099,29 @@ MoveYtdlpFromTemp(sourceFile, timeoutMs := 120000) {
 ; =========================
 ExtractSingleFileFromZipShell(zipPath, destDir, fileName, timeoutMs := 120000) {
     if !FileExist(zipPath)
-        throw Error("ZIP not found: " zipPath)
+        throw Error(T("err.zip_not_found", zipPath))
 
-    if !DirExist(destDir)
-        DirCreate(destDir)
+    if !DirExist(destDir) {
+        try DirCreate(destDir)
+        catch as e
+            throw Error(T("err.create_dir_failed", destDir, e.Message))
+    }
 
     app := ComObject("Shell.Application")
 
     zipNs := app.NameSpace(zipPath)
     if !zipNs
-        throw Error("Failed to open ZIP via Shell: " zipPath)
+        throw Error(T("err.zip_open_failed", zipPath))
 
     dstNs := app.NameSpace(destDir)
     if !dstNs
-        throw Error("Failed to open destination via Shell: " destDir)
+        throw Error(T("err.dest_open_failed", destDir))
 
     item := FindZipItemRecursive(zipNs, fileName)
     if !item
-        throw Error(fileName " not found inside ZIP: " zipPath)
+        throw Error(T("err.zip_item_not_found", fileName, zipPath))
 
-    ; 16 = No UI (best-effort). Still silent in most environments.
+    ; 16|4 = No UI + No progress dialog (best-effort).
     dstNs.CopyHere(item, 16|4)
 
     ; Wait until the file appears
@@ -956,7 +1129,7 @@ ExtractSingleFileFromZipShell(zipPath, destDir, fileName, timeoutMs := 120000) {
     start := A_TickCount
     while !FileExist(target) {
         if (A_TickCount - start > timeoutMs)
-            throw Error("Timeout waiting for extracted file: " target)
+            throw Error(T("err.wait_extract_timeout", target, timeoutMs))
         Sleep 100
     }
 
@@ -1170,4 +1343,141 @@ ReadAvailableFromPipe(hPipe, drainAll := false) {
             break
     }
     return data
+}
+
+; =================
+; i18n
+; =================
+InitLanguage(ddlLang) {
+    global CUR_LANG, iniPath, iniSection, iniKeyLang, LANG_FALLBACK
+
+    saved := IniRead(iniPath, iniSection, iniKeyLang, "")
+    tag := saved != "" ? saved : GuessOsLangTag()
+
+    ; If saved/guessed is not available, fall back.
+    if !LangTagAvailable(tag)
+        tag := LANG_FALLBACK
+    if !LangTagAvailable(tag)
+        tag := FirstAvailableLangTag()
+
+    CUR_LANG := tag
+    SetDdlSelectionByTag(ddlLang, tag)
+    LoadI18N(tag)
+}
+
+LangTagAvailable(tag) {
+    global LANG_FILES
+    return LANG_FILES.Has(tag)
+}
+
+FirstAvailableLangTag() {
+    global LANG_FILES, LANG_FALLBACK
+    if LANG_FILES.Has(LANG_FALLBACK)
+        return LANG_FALLBACK
+    for tag, _ in LANG_FILES
+        return tag
+    return LANG_FALLBACK
+}
+
+SetDdlSelectionByTag(ddlLang, tag) {
+    global LANGS
+    for disp, t in LANGS {
+        if (t = tag) {
+            ddlLang.Choose(disp)
+            return
+        }
+    }
+    ddlLang.Choose(1)
+}
+
+LoadI18N(tag) {
+    global I18N, LANG_FILES, LANG_FALLBACK
+
+    I18N := Map()
+
+    ; Load fallback first (if it exists)
+    if LANG_FILES.Has(LANG_FALLBACK)
+        MergeIniIntoMap(I18N, LANG_FILES[LANG_FALLBACK], "strings")
+
+    ; Overlay selected language (if different)
+    if (tag != LANG_FALLBACK && LANG_FILES.Has(tag))
+        MergeIniIntoMap(I18N, LANG_FILES[tag], "strings")
+}
+
+GuessOsLangTag() {
+    global LANG_FILES, LANG_FALLBACK
+
+    langHex := "0x" A_Language
+
+    switch langHex {
+        case 0x0807, 0x0407:
+            return LANG_FILES.Has("de-CH") ? "de-CH" : "de"
+
+        case 0x0409:
+            return LANG_FILES.Has("en-US") ? "en-US" : "en"
+
+        default:
+            return LANG_FALLBACK
+    }
+}
+
+MergeIniIntoMap(dest, iniFile, section) {
+    if !FileExist(iniFile)
+        return
+    raw := IniRead(iniFile, section)
+    if (raw = "")
+        return
+    for line in StrSplit(raw, "`n", "`r") {
+        if (line = "" || InStr(line, "=") = 0)
+            continue
+        parts := StrSplit(line, "=", , 2)
+        k := Trim(parts[1])
+        v := (parts.Length >= 2) ? parts[2] : ""
+        dest[k] := v
+    }
+}
+
+T(key, args*) {
+    global I18N, I18N_MISSING, I18N_DEBUG
+
+    if I18N.Has(key) {
+        s := I18N[key]
+    } else {
+        ; Record missing key once
+        if !I18N_MISSING.Has(key)
+            I18N_MISSING[key] := true
+
+        ; Development behavior
+        if (I18N_DEBUG) {
+            ; Visually obvious but non-breaking
+            s := "[[" key "]]"
+        } else {
+            ; Production fallback: show key name silently
+            s := key
+        }
+    }
+
+    ; Replace placeholders
+    for i, a in args
+        s := StrReplace(s, "{" i "}", a)
+
+    ; Convert encoded line breaks
+    s := StrReplace(s, "``r``n", "`r`n")
+    s := StrReplace(s, "``n", "`n")
+    s := StrReplace(s, "``r", "`r")
+
+    return s
+}
+
+LogMissingTranslations(*) {
+	global I18N_MISSING, I18N_DEBUG, LOCAL_YTD
+
+	if (I18N_DEBUG) {
+		if (I18N_MISSING.Count > 0) {
+			i18nlist := "Missing translation keys:`r`n`r`n"
+			for k, _ in I18N_MISSING
+				i18nlist .= k "`r`n"
+			FileAppend(i18nlist "`r`n", LOCAL_YTD "\missing_i18n_keys.txt")
+		}
+	}
 }

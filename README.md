@@ -1,9 +1,16 @@
 # YouTube Downloader
 Simple UI to paste a bunch of links to YouTube videos in and download them using yt-dlp
 
-![title screen](Screenshot.png)
+![title screen](screenshot.png)
 
   
+## Features
+- Simple, intuitive user-interface.
+- Portable. No installation required, but provided for conveniance reasons.
+- Small footprint. The UI itself just uses around 4MB RAM.
+- Automatic download and installation of all dependencies to get you up and running.
+- Multi-language support. Translations of other languages are welcome. Just put them in the lang folder and they'll work.
+
 ## Usage
 When you start it for the first time, all necessary dependencies will be installed in the folder where you installed YouTube Downloader.
 
@@ -31,4 +38,4 @@ Alternatively, you can also update yt-dlp, Deno, and FFmpeg yourself via the res
 ## Known issues
 It may happen that a video cannot be downloaded even though all dependencies are cleanly installed and up to date. In this case, you can only wait until there is an update from yt-dlp that can cope with the changes Google has made to YouTube.
 
-If you get a virus warning it is a false positive. Some anti-virus programs are extremely paranoid and see things which are simply not there. I uploaded the binary to [VirusTotal](https://www.virustotal.com/gui/file/17249aca50a2025b3a76a6e113491b7fafb680f0aa20464333c59016e7802fdb?nocache=1) and none of the anti-virus programs had an issue with it. However, that may change anytime.
+If you get a virus warning it is a false positive. Some anti-virus programs are extremely paranoid and see things which are simply not there. I uploaded the binary to VirusTotal, provide a link in the release tag, and none of the anti-virus programs had an issue with it. However, that may change anytime.
