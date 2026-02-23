@@ -23,10 +23,12 @@ Only yt-dlp will require updates at irregular intervals. To update yt-dlp, click
 
 Deno and FFmpeg rarely require updates. If this should ever be necessary, simply delete all files in the folder where you installed YouTube Downloader, except for the YouTube Downloader.exe file. Then run YouTube Downloader again so that all dependencies are downloaded fresh.
 
-Alternatively, you can also update yt-dlp, Deno, and FFmpeg yourself via the respective official GitHub repositories:
-https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip
-https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip
-https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
+Alternatively, you can also update yt-dlp, Deno, and FFmpeg yourself via the respective official GitHub repositories:  
+[Latest Deno](https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip)  
+[Latest FFmpeg](https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip)  
+[Latest yt-dlp](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)  
 
 ## Known issues
 It may happen that a video cannot be downloaded even though all dependencies are cleanly installed and up to date. In this case, you can only wait until there is an update from yt-dlp that can cope with the changes Google has made to YouTube.
+
+If you get a virus warning it is a false positive. Some anti-virus programs are extremely paranoid and see things which are simply not there. I uploaded the binary to [VirusTotal](https://www.virustotal.com/gui/file/17249aca50a2025b3a76a6e113491b7fafb680f0aa20464333c59016e7802fdb?nocache=1) and none of the anti-virus programs had an issue with it. However, that may change anytime.
